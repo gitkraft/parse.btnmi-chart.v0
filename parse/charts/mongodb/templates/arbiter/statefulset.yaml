@@ -1,5 +1,5 @@
 {{- /*
-Copyright VMware, Inc.
+Copyright Broadcom, Inc. All Rights Reserved.
 SPDX-License-Identifier: APACHE-2.0
 */}}
 
@@ -19,6 +19,7 @@ metadata:
 spec:
   serviceName: {{ include "mongodb.arbiter.service.nameOverride" . }}
   podManagementPolicy: {{ .Values.arbiter.podManagementPolicy }}
+  replicas: 1
   {{- if .Values.arbiter.updateStrategy }}
   updateStrategy: {{- toYaml .Values.arbiter.updateStrategy | nindent 4 }}
   {{- end }}
@@ -49,8 +50,8 @@ spec:
       affinity: {{- include "common.tplvalues.render" (dict "value" .Values.arbiter.affinity "context" $) | nindent 8 }}
       {{- else }}
       affinity:
-        podAffinity: {{- include "common.affinities.pods" (dict "type" .Values.arbiter.podAffinityPreset "component" "arbiter" "customLabels" $podLabels "topologyKey" .Values.topologyKey "context" $) | nindent 10 }}
-        podAntiAffinity: {{- include "common.affinities.pods" (dict "type" .Values.arbiter.podAntiAffinityPreset "component" "arbiter" "customLabels" $podLabels "topologyKey" .Values.topologyKey "context" $) | nindent 10 }}
+        podAffinity: {{- include "common.affinities.pods" (dict "type" .Values.arbiter.podAffinityPreset "component" "mongodb" "customLabels" $podLabels "topologyKey" .Values.topologyKey "context" $) | nindent 10 }}
+        podAntiAffinity: {{- include "common.affinities.pods" (dict "type" .Values.arbiter.podAntiAffinityPreset "component" "mongodb" "customLabels" $podLabels "topologyKey" .Values.topologyKey "context" $) | nindent 10 }}
         nodeAffinity: {{- include "common.affinities.nodes" (dict "type" .Values.arbiter.nodeAffinityPreset.type "key" .Values.arbiter.nodeAffinityPreset.key "values" .Values.arbiter.nodeAffinityPreset.values) | nindent 10 }}
       {{- end }}
       {{- if .Values.arbiter.nodeSelector }}
@@ -82,6 +83,9 @@ spec:
       initContainers:
         {{- if .Values.arbiter.initContainers }}
         {{- include "common.tplvalues.render" (dict "value" .Values.arbiter.initContainers "context" $) | nindent 8 }}
+        {{- end }}
+        {{- if and .Values.externalAccess.enabled ( or .Values.externalAccess.service.publicNames  .Values.externalAccess.service.domain ) }}
+        {{- include "mongodb.initContainers.dnsCheck" . | nindent 8 }}
         {{- end }}
         {{- if and .Values.tls.enabled .Values.arbiter.enabled }}
         - name: generate-tls-certs
@@ -156,7 +160,7 @@ spec:
             - name: MONGODB_REPLICA_SET_MODE
               value: "arbiter"
             - name: MONGODB_INITIAL_PRIMARY_HOST
-              value: {{ printf "%s-0.%s.$(MY_POD_NAMESPACE).svc.%s" (include "mongodb.fullname" .) (include "mongodb.service.nameOverride" .) .Values.clusterDomain }}
+              value: {{ include "mongodb.initialPrimaryHost" . | quote }}
             - name: MONGODB_REPLICA_SET_NAME
               value: {{ .Values.replicaSetName | quote }}
             - name: MONGODB_ADVERTISED_HOSTNAME
@@ -218,8 +222,10 @@ spec:
           livenessProbe: {{- include "common.tplvalues.render" (dict "value" .Values.arbiter.customLivenessProbe "context" $) | nindent 12 }}
           {{- else if .Values.arbiter.livenessProbe.enabled }}
           livenessProbe: {{- include "common.tplvalues.render" (dict "value" (omit .Values.arbiter.livenessProbe "enabled") "context" $) | nindent 12 }}
-            tcpSocket:
-              port: mongodb
+            exec:
+              command:
+                - pgrep
+                - mongod
           {{- end }}
           {{- if .Values.arbiter.customReadinessProbe }}
           readinessProbe: {{- include "common.tplvalues.render" (dict "value" .Values.arbiter.customReadinessProbe "context" $) | nindent 12 }}
@@ -232,12 +238,13 @@ spec:
           startupProbe: {{- include "common.tplvalues.render" (dict "value" .Values.arbiter.customStartupProbe "context" $) | nindent 12 }}
           {{- else if .Values.arbiter.startupProbe.enabled }}
           startupProbe: {{- include "common.tplvalues.render" (dict "value" (omit .Values.arbiter.startupProbe "enabled") "context" $) | nindent 12 }}
-            tcpSocket:
-              port: mongodb
+            exec:
+              command:
+                - /bitnami/scripts/startup-probe.sh
           {{- end }}
           {{- end }}
           {{- if .Values.arbiter.resources }}
-          resources: {{- toYaml .Values.arbiter.resources | nindent 12 }}
+          resources: {{- include "common.tplvalues.render" (dict "value" .Values.arbiter.resources "context" $) | nindent 12 }}
           {{- else if ne .Values.arbiter.resourcesPreset "none" }}
           resources: {{- include "common.resources.preset" (dict "type" .Values.arbiter.resourcesPreset) | nindent 12 }}
           {{- end }}
@@ -254,6 +261,9 @@ spec:
             - name: empty-dir
               mountPath: /opt/bitnami/mongodb/logs
               subPath: app-logs-dir
+            - name: empty-dir
+              mountPath: /bitnami/mongodb
+              subPath: app-volume-dir
             {{- if or .Values.arbiter.configuration .Values.arbiter.existingConfigmap }}
             - name: config
               mountPath: /opt/bitnami/mongodb/conf/mongodb.conf
